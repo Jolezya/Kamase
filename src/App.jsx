@@ -64,6 +64,11 @@ const iso = (t) => new Date(t).toISOString().slice(0, 10);
 const monthKey = (t) => iso(t).slice(0, 7);
 const startOfMonth = (t = now()) => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), 1).getTime(); };
 const daysInMonth = (t = now()) => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); };
+const CYCLE_DAY = 15;
+const cycleStart = (t = now()) => { const d = new Date(t); d.setHours(0, 0, 0, 0); if (d.getDate() >= CYCLE_DAY) return new Date(d.getFullYear(), d.getMonth(), CYCLE_DAY).getTime(); return new Date(d.getFullYear(), d.getMonth() - 1, CYCLE_DAY).getTime(); };
+const cycleEnd = (t = now()) => { const s = new Date(cycleStart(t)); return new Date(s.getFullYear(), s.getMonth() + 1, CYCLE_DAY).getTime(); };
+const cyclePrevStart = (t = now()) => { const s = new Date(cycleStart(t)); return new Date(s.getFullYear(), s.getMonth() - 1, CYCLE_DAY).getTime(); };
+const cycleLabel = (t = now()) => { const s = new Date(cycleStart(t)), e = new Date(cycleEnd(t) - DAY); const m = (x) => x.toLocaleDateString(undefined, { day: "numeric", month: "short" }); return m(s) + " – " + m(e); };
 const weekStart = (t) => { const d = new Date(t); const k = (d.getDay() + 6) % 7; d.setHours(0, 0, 0, 0); return d.getTime() - k * DAY; };
 const rel = (t) => {
  if (!t) return "never";
@@ -80,13 +85,18 @@ const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
  two copies keeps the newer record per id, so both phones converge no
  matter who wrote last or in which order.                              */
 
-import { loadDb as remoteLoad, saveDb as remoteSave, subscribe as remoteSubscribe } from "./sync";
-
+const KEY = "kamase:v5:db";
+const SHARED = true;
 const COLLECTIONS = ["list", "catalog", "receipts", "recipes", "plan", "presence"];
 
-async function loadDb() { return remoteLoad(); }
-async function saveDb(v) { return remoteSave(v); }
-
+async function loadDb() {
+ try { const r = await window.storage.get(KEY, SHARED); return r ? JSON.parse(r.value) : null; }
+ catch (e) { return null; }
+}
+async function saveDb(v) {
+ try { await window.storage.set(KEY, JSON.stringify(v), SHARED); return true; }
+ catch (e) { return false; }
+}
 function mergeColl(a = {}, b = {}) {
  const out = { ...a };
  for (const id of Object.keys(b)) {
@@ -148,8 +158,7 @@ function useStore(me) {
   const iv = setInterval(() => { if (!document.hidden) sync(); }, 8000);
   const onShow = () => { if (!document.hidden) sync(); };
   document.addEventListener("visibilitychange", onShow);
-  const unsub = remoteSubscribe(() => { if (alive) sync(); });
-  return () => { alive = false; clearInterval(iv); clearTimeout(timer.current); document.removeEventListener("visibilitychange", onShow); unsub && unsub(); };
+  return () => { alive = false; clearInterval(iv); clearTimeout(timer.current); document.removeEventListener("visibilitychange", onShow); };
  }, [sync]);
 
  const put = useCallback((domain, rec) => {
@@ -203,8 +212,8 @@ function usePantry(db) {
 function useSpend(db) {
  return useMemo(() => {
   const rs = live(db.receipts).sort((a, b) => b.at - a.at);
-  const mk = monthKey(now());
-  const month = rs.filter((r) => monthKey(r.at) === mk);
+  const cs = cycleStart(), ce = cycleEnd();
+  const month = rs.filter((r) => r.at >= cs && r.at < ce);
   const spent = month.reduce((s, r) => s + r.total, 0);
   const byCat = {}, byStore = {};
   month.forEach((r) => {
@@ -217,8 +226,8 @@ function useSpend(db) {
    const e = s + 7 * DAY;
    weeks.push({ start: s, total: rs.filter((r) => r.at >= s && r.at < e).reduce((x, r) => x + r.total, 0) });
   }
-  const prevKey = monthKey(startOfMonth() - 1);
-  const prev = rs.filter((r) => monthKey(r.at) === prevKey).reduce((s, r) => s + r.total, 0);
+  const ps = cyclePrevStart();
+  const prev = rs.filter((r) => r.at >= ps && r.at < cs).reduce((s, r) => s + r.total, 0);
   const pant = month.reduce((s, r) => s + (r.pant || 0), 0);
   const owed = rs.filter((r) => r.payment === "personal" && !r.reimbursed);
   const owedTotal = owed.reduce((s, r) => s + r.total, 0);
@@ -696,7 +705,23 @@ function ItemSheet({ open, onClose, S, item, onSave, onDelete }) {
  const set = (k, v) => setD((p) => ({ ...p, [k]: v }));
  return (
   <Sheet open={open} onClose={onClose} title={item && item.id ? "Edit item" : "Add item"}>
-   <Field label="Item" value={d.name || ""} onChange={(e) => set("name", e.target.value)} placeholder="Sourdough loaf" autoFocus />
+   <Field label="Item" value={d.name || ""} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Syltetøy" autoFocus />
+
+   <div className="bq"><Label>How much?</Label></div>
+   <div className="bw g cd u db ds kw" style={{ marginBottom: 8 }}>
+    <button className="kp s cg kq" onClick={() => set("qty", Math.max(1, (d.qty || 1) - 1))}><Minus size={15} /></button>
+    <input value={d.unit || ""} onChange={(e) => set("unit", e.target.value)} placeholder="1 boks · 200 g · 1 kg"
+     className="mo ax a f15 n aj" style={{ background: "transparent", textAlign: "center", color: C.ink }} />
+    <button className="kp s cg kq" onClick={() => set("qty", (d.qty || 1) + 1)}><Plus size={15} /></button>
+   </div>
+   {(d.qty || 1) > 1 && <div className="f12 db ka" style={{ marginTop: -4, marginBottom: 8, textAlign: "center" }}>{d.qty}× {d.unit || "of this"}</div>}
+   <div className="bw af aw" style={{ gap: 6, marginBottom: 16 }}>
+    {["1 boks", "1 pk", "200 g", "500 g", "1 kg", "1 l", "6 stk", "1 flaske", "1 pose", "1 glass"].map((u) => (
+     <button key={u} onClick={() => set("unit", u)} className="kp o cr f125 e"
+      style={{ padding: "6px 11px", background: d.unit === u ? C.ink : C.paper, color: d.unit === u ? "#F6F7F2" : C.ink2, border: `1px solid ${d.unit === u ? C.ink : C.line}` }}>{u}</button>
+    ))}
+   </div>
+
    <div className="bq"><Label>Category</Label></div>
    <div className="bw af aw cn">
     {CATS.map((c) => {
@@ -708,17 +733,6 @@ function ItemSheet({ open, onClose, S, item, onSave, onDelete }) {
       </button>
      );
     })}
-   </div>
-   <div className="bw bm ck">
-    <div className="ax">
-     <div className="bq"><Label>Quantity</Label></div>
-     <div className="bw g cd u db ds kw">
-      <button className="kp s cg kq" onClick={() => set("qty", Math.max(1, (d.qty || 1) - 1))}><Minus size={14} /></button>
-      <div className="mo ax a f15">{d.qty || 1}</div>
-      <button className="kp s cg kq" onClick={() => set("qty", (d.qty || 1) + 1)}><Plus size={14} /></button>
-     </div>
-    </div>
-    <div className="ax"><Field label="Size / unit" value={d.unit || ""} onChange={(e) => set("unit", e.target.value)} placeholder="500 g" /></div>
    </div>
    <Field label="Note" value={d.note || ""} onChange={(e) => set("note", e.target.value)} placeholder="the ripe ones, for Sunday" />
    <div className="bw g v u cs ch cv kw">
@@ -734,7 +748,7 @@ function ItemSheet({ open, onClose, S, item, onSave, onDelete }) {
  );
 }
 
-function ListScreen({ S, A, openScan, onStartShopping }) {
+function ListScreen({ S, A, openScan, onStartShopping, toast }) {
  const { db, me } = S;
  const others = live(db.presence).filter((p) => p.id !== me && p.active && now() - p.at < 120000);
  const items = live(db.list);
@@ -754,7 +768,14 @@ function ListScreen({ S, A, openScan, onStartShopping }) {
  const checked = items.filter((i) => i.done);
  const estimate = items.reduce((s, i) => s + (lastPrice(db, i.name) || 0) * (i.qty || 1), 0);
 
- const submit = () => { if (!norm(q)) return; A.addToList(q); setQ(""); };
+
+ const openAdd = () => {
+  const n = norm(q);
+  const c = n ? db.catalog[n] : null;
+  setSheet({ name: q.trim() ? cap(q.trim()) : "", cat: (c && c.cat) || "pantry", qty: 1, unit: (c && c.unit) || "", note: "", fav: c ? !!c.fav : false });
+  setQ("");
+ };
+ const submit = openAdd;
 
  return (
   <div className="pb-40">
@@ -765,9 +786,9 @@ function ListScreen({ S, A, openScan, onStartShopping }) {
      boxShadow: focused ? `0 0 0 2px ${C.citron}, 0 10px 26px -18px rgba(27,42,36,.4)` : SH1,
      transition: "box-shadow .18s",
     }}>
-     <span className="o bw g p an" style={{ width: 28, height: 28, background: C.citron }}>
+     <button className="kp o bw g p an" style={{ width: 28, height: 28, background: C.citron }} onClick={openAdd} aria-label="Add item">
       <Plus size={16} color={C.ink} strokeWidth={2.5} />
-     </span>
+     </button>
      <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()}
       onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
       placeholder="Add an item to the list" className="ax f15 n aj q" style={{ color: C.ink }} />
@@ -874,6 +895,10 @@ function ListScreen({ S, A, openScan, onStartShopping }) {
           </button>
           {i.fav && <Star size={13} color={C.amber} fill={C.amber} className="bi" />}
           <span className="bn"><Person id={i.by || "K"} size={20} /></span>
+          <button className="kp o bn" onClick={() => { S.remove("list", i.id); toast(`${i.name} removed`); }} aria-label="Remove item"
+           style={{ padding: 4, borderRadius: 9999 }}>
+           <X size={15} color={C.muted} />
+          </button>
          </div>
         );
        })}
@@ -947,7 +972,10 @@ function ListScreen({ S, A, openScan, onStartShopping }) {
    )}
 
    <ItemSheet open={!!sheet} onClose={() => setSheet(null)} S={S} item={sheet}
-    onSave={(d) => S.patch("list", d.id, d)} onDelete={(id) => S.remove("list", id)} />
+    onSave={(d) => {
+     if (d.id) { S.patch("list", d.id, d); }
+     else { A.addToList(d.name, { cat: d.cat, qty: d.qty, unit: d.unit, note: d.note, fav: d.fav }); }
+    }} onDelete={(id) => S.remove("list", id)} />
 
   </div>
  );
@@ -983,7 +1011,7 @@ function ShoppingMode({ S, A, onClose }) {
 
  return (
   <div className="ac ar z-50 bw ao" style={{ background: C.canvas }}>
-   <div className="cs ce cq an" style={{ background: C.ink }}>
+   <div className="cs ce cq an satx" style={{ background: C.ink }}>
     <div className="bw g bm">
      <div className="ax">
       <div className="mo j f105" style={{ letterSpacing: ".16em", color: "#94A199" }}>In the shop</div>
@@ -1072,7 +1100,7 @@ function ShoppingMode({ S, A, onClose }) {
     )}
    </div>
 
-   <div className="ac ay aq al cs cu dp" style={{ background: `linear-gradient(${C.canvas}00, ${C.canvas} 40%)` }}>
+   <div className="ac ay aq al cs cu dp sab" style={{ background: `linear-gradient(${C.canvas}00, ${C.canvas} 40%)` }}>
     <Btn full size="lg" tone="citron" disabled={!done.length} onClick={() => { A.buyChecked(); onClose(); }}>
      <Check size={16} strokeWidth={3} />Finish — {done.length} into the kitchen
     </Btn>
@@ -1188,12 +1216,11 @@ function PantryScreen({ S, A }) {
 }
 
 async function askClaude(content) {
- const r = await fetch("/api/ai", {
+ const r = await fetch("https://api.anthropic.com/v1/messages", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ content }),
+  body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content }] }),
  });
- if (!r.ok) throw new Error("ai proxy failed");
  const d = await r.json();
  return (d.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
 }
@@ -1504,8 +1531,10 @@ function MoneyScreen({ S, toast }) {
 
  const budget = Number(db.settings.budget) || 0;
  const left = budget - sp.spent;
- const dLeft = daysInMonth() - new Date().getDate() + 1;
- const projected = (sp.spent / Math.max(1, new Date().getDate())) * daysInMonth();
+ const dLeft = Math.max(1, Math.round((cycleEnd() - now()) / DAY));
+ const cycleLen = Math.round((cycleEnd() - cycleStart()) / DAY);
+ const dElapsed = Math.max(1, Math.round((now() - cycleStart()) / DAY) + 1);
+ const projected = (sp.spent / dElapsed) * cycleLen;
  const catRows = Object.entries(sp.byCat).sort((a, b) => b[1] - a[1]);
  const storeRows = Object.entries(sp.byStore).sort((a, b) => b[1] - a[1]);
  const tracked = live(db.catalog).filter((c) => (c.prices || []).length >= 2);
@@ -1514,7 +1543,7 @@ function MoneyScreen({ S, toast }) {
  const savingPlan = async () => {
   setThinking(true);
   try {
-   const txt = await askClaude(`A two-person household spent ${money(sp.spent, cur)} on groceries this month against a ${money(budget, cur)} budget. By category: ${catRows.map(([k, v]) => catOf(k).label + " " + money(v, cur)).join("; ")}. By shop: ${storeRows.map(([k, v]) => k + " " + money(v, cur)).join("; ")}. Last month: ${money(sp.prev, cur)}. Give three concrete ways to spend less without eating worse. ONLY JSON: {"tips":[{"title":string,"body":string}]}. Titles max 5 words, bodies max 22 words.`);
+   const txt = await askClaude(`A two-person household spent ${money(sp.spent, cur)} on groceries this budget cycle against a ${money(budget, cur)} budget. By category: ${catRows.map(([k, v]) => catOf(k).label + " " + money(v, cur)).join("; ")}. By shop: ${storeRows.map(([k, v]) => k + " " + money(v, cur)).join("; ")}. Previous cycle: ${money(sp.prev, cur)}. Give three concrete ways to spend less without eating worse. ONLY JSON: {"tips":[{"title":string,"body":string}]}. Titles max 5 words, bodies max 22 words.`);
    setPlan(parseJson(txt).tips || []);
   } catch (e) { toast("Couldn't build a plan right now"); }
   setThinking(false);
@@ -1530,7 +1559,7 @@ function MoneyScreen({ S, toast }) {
       <div className="rounded-t-2xl di co ci" style={{ background: C.paper, boxShadow: "0 1px 2px rgba(27,42,36,.05), 0 10px 30px -18px rgba(27,42,36,.3)" }}>
        <div className="bw y v">
         <div>
-         <Label>{new Date().toLocaleDateString(undefined, { month: "long", year: "numeric" })}</Label>
+         <Label>{cycleLabel()}</Label>
          <div className="kd h r dd" style={{ fontSize: 40 }}>{money(sp.spent, cur)}</div>
          <div className="f13 bi ka">{budget ? `of ${money(budget, cur)} set aside` : "tap below to set a budget"}</div>
         </div>
@@ -1567,9 +1596,9 @@ function MoneyScreen({ S, toast }) {
      )}
 
      <div className="dw" />
-     <Sec t="Where it went this month">
+     <Sec t="Where it went this cycle">
       <div className="da ab">
-       {!catRows.length && <div className="f135 ka">No receipts yet this month.</div>}
+       {!catRows.length && <div className="f135 ka">No receipts yet this cycle.</div>}
        {catRows.map(([k, v]) => (
         <BarRow key={k} l={catOf(k).label} v={money(v, cur)} icon={catOf(k).icon} ic={catOf(k).color}
          c={catOf(k).color} pct={(v / catRows[0][1]) * 100} />
@@ -1647,7 +1676,7 @@ function MoneyScreen({ S, toast }) {
 
    {tab === "insights" && (
     <div className="ab">
-     <Sec t="Month against month">
+     <Sec t="Cycle against cycle">
       <div className="bw ae bm dd">
        <div className="kd f30 h r">{money(sp.spent, cur)}</div>
        {sp.prev > 0 && (
@@ -1726,7 +1755,7 @@ function MoneyScreen({ S, toast }) {
    )}
 
    <Sheet open={budgetSheet} onClose={() => setBudgetSheet(false)} title="Monthly amount">
-    <div className="f135 c cn ka">The total for food and household this month. Everything is measured against it.</div>
+    <div className="f135 c cn ka">The total for each 15th-to-15th cycle. Everything is measured against it.</div>
     <Field label={`Amount (${cur})`} type="number" value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus />
     <Btn full size="lg" onClick={() => { S.setSettings({ budget: Number(draft) || 0 }); setBudgetSheet(false); toast("Budget updated for both of you"); }}>Save amount</Btn>
    </Sheet>
@@ -2009,12 +2038,12 @@ export default function KaMaSe() {
  const dot = S.status === "live" ? C.citron : S.status === "syncing" ? C.amber : C.red;
 
  return (
-  <div className="km az bw g p" style={{ height: "100vh", background: C.ink }}>
+  <div className="km az bw g p" style={{ height: "100dvh", minHeight: "100vh", background: C.ink }}>
    <Style />
-   <div className="ai z bw ao az" style={{ maxWidth: 430, height: "100%", background: C.canvas }}>
+   <div className="ai z bw ao az" style={{ maxWidth: 430, height: "100%", maxHeight: "100dvh", background: C.canvas }}>
 
     {/* header */}
-    <div className="cs ce cj an" style={{ background: C.canvas }}>
+    <div className="cs ce cj an sat" style={{ background: C.canvas }}>
      <div className="bw g v">
       <div>
        <div className="kd h r" style={{ fontSize: 23, letterSpacing: "0.02em" }}>
@@ -2047,7 +2076,7 @@ export default function KaMaSe() {
       </div>
      ) : (
       <>
-       {tab === "list" && <ListScreen S={S} A={A} openScan={() => setScan(true)} onStartShopping={() => setShopping(true)} />}
+       {tab === "list" && <ListScreen S={S} A={A} openScan={() => setScan(true)} onStartShopping={() => setShopping(true)} toast={toast} />}
        {tab === "pantry" && <PantryScreen S={S} A={A} />}
        {tab === "recipes" && <KitchenScreen S={S} A={A} toast={toast} />}
        {tab === "money" && <MoneyScreen S={S} toast={toast} />}
@@ -2063,7 +2092,7 @@ export default function KaMaSe() {
     )}
 
     {/* nav */}
-    <div className="ac ay aq al cs dc dp z-30" style={{ background: `linear-gradient(${C.canvas}00, ${C.canvas} 42%)` }}>
+    <div className="ac ay aq al cs dc dp z-30 sab" style={{ background: `linear-gradient(${C.canvas}00, ${C.canvas} 42%)` }}>
      <div className="o bw g db ds" style={{ background: C.ink, boxShadow: "0 16px 40px -16px rgba(20,30,26,.7)" }}>
       {TABS.slice(0, 2).map((t) => <NavBtn key={t.id} t={t} tab={tab} setTab={setTab} />)}
       <button onClick={() => setScan(true)} className="kp dh o bw g p an" style={{ width: 44, height: 44, background: C.citron }}>
