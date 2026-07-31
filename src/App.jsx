@@ -85,18 +85,13 @@ const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
  two copies keeps the newer record per id, so both phones converge no
  matter who wrote last or in which order.                              */
 
-const KEY = "kamase:v5:db";
-const SHARED = true;
+import { loadDb as remoteLoad, saveDb as remoteSave, subscribe as remoteSubscribe } from "./sync";
+
 const COLLECTIONS = ["list", "catalog", "receipts", "recipes", "plan", "presence"];
 
-async function loadDb() {
- try { const r = await window.storage.get(KEY, SHARED); return r ? JSON.parse(r.value) : null; }
- catch (e) { return null; }
-}
-async function saveDb(v) {
- try { await window.storage.set(KEY, JSON.stringify(v), SHARED); return true; }
- catch (e) { return false; }
-}
+async function loadDb() { return remoteLoad(); }
+async function saveDb(v) { return remoteSave(v); }
+
 function mergeColl(a = {}, b = {}) {
  const out = { ...a };
  for (const id of Object.keys(b)) {
@@ -158,7 +153,8 @@ function useStore(me) {
   const iv = setInterval(() => { if (!document.hidden) sync(); }, 8000);
   const onShow = () => { if (!document.hidden) sync(); };
   document.addEventListener("visibilitychange", onShow);
-  return () => { alive = false; clearInterval(iv); clearTimeout(timer.current); document.removeEventListener("visibilitychange", onShow); };
+  const unsub = remoteSubscribe(() => { if (alive) sync(); });
+  return () => { alive = false; clearInterval(iv); clearTimeout(timer.current); document.removeEventListener("visibilitychange", onShow); unsub && unsub(); };
  }, [sync]);
 
  const put = useCallback((domain, rec) => {
@@ -1216,11 +1212,12 @@ function PantryScreen({ S, A }) {
 }
 
 async function askClaude(content) {
- const r = await fetch("https://api.anthropic.com/v1/messages", {
+ const r = await fetch("/api/ai", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content }] }),
+  body: JSON.stringify({ content }),
  });
+ if (!r.ok) { let m = "ai proxy failed"; try { m = (await r.json()).error || m; } catch (e) {} throw new Error(m); }
  const d = await r.json();
  return (d.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
 }
@@ -1835,9 +1832,10 @@ function ScanSheet({ open, onClose, S, A, toast }) {
  const [state, setState] = useState("idle");
  const [result, setResult] = useState(null);
  const [preview, setPreview] = useState(null);
+ const [errMsg, setErrMsg] = useState("");
  const fileRef = useRef(null);
 
- useEffect(() => { if (open) { setState("idle"); setResult(null); setPreview(null); } }, [open]);
+ useEffect(() => { if (open) { setState("idle"); setResult(null); setPreview(null); setErrMsg(""); } }, [open]);
 
  const handle = async (e) => {
   const f = e.target.files && e.target.files[0];
@@ -1859,7 +1857,7 @@ function ScanSheet({ open, onClose, S, A, toast }) {
     setResult({ payment: "shared", paidBy: S.me, pant: j.pant || 0, ...j, items: (j.items || []).map((i) => ({ ...i, keep: true })) });
    } else setResult(j);
    setState("review");
-  } catch (err) { setState("failed"); }
+  } catch (err) { setErrMsg(String(err && err.message || err)); setState("failed"); }
   if (fileRef.current) fileRef.current.value = "";
  };
 
@@ -1914,7 +1912,7 @@ function ScanSheet({ open, onClose, S, A, toast }) {
    )}
 
    {state === "failed" && (
-    <Empty icon={AlertCircle} title="That one didn't read" body="Try again with the whole receipt in frame, flat and evenly lit."
+    <Empty icon={AlertCircle} title="That one didn't read" body={errMsg && !/unreadable|unknown/.test(errMsg) ? errMsg : "Try again with the whole receipt in frame, flat and evenly lit."}
      action={<Btn onClick={() => setState("idle")}>Take another photo</Btn>} />
    )}
 
