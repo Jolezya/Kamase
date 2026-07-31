@@ -24,7 +24,7 @@ export default async function handler(req, res) {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: process.env.KAMASE_MODEL || "claude-sonnet-5",
         max_tokens: 1024,
         messages: [{ role: "user", content }],
       }),
@@ -32,7 +32,9 @@ export default async function handler(req, res) {
 
     const data = await r.json();
     if (!r.ok) {
-      res.status(r.status).json({ error: data.error ? data.error.message : "upstream error" });
+      const msg = data && data.error && data.error.message ? data.error.message : "upstream error";
+      console.error("anthropic error", r.status, msg);
+      res.status(r.status).json({ error: msg });
       return;
     }
     res.status(200).json({ content: data.content || [] });
