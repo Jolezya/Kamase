@@ -1888,20 +1888,17 @@ function ScanSheet({ open, onClose, S, A, toast }) {
     ))}
    </div>
 
-   <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={handle} style={{ display: "none" }} />
-
    {state === "idle" && (
-    <div>
-     <button onClick={() => fileRef.current && fileRef.current.click()}
-      className="kp az l bv bw ao g bm"
-      style={{ background: C.paper, border: `1.5px dashed ${C.line}` }}>
-      <span className="l cf" style={{ background: C.citron }}><Camera size={20} color={C.ink} /></span>
-      <span className="kd f16 h">{mode === "receipt" ? "Photograph the receipt" : "Photograph the product"}</span>
-      <span className="f13 df a c ka">
-       {mode === "receipt" ? "Items, prices and total land in your budget, and prices attach to each item." : "The label is read and turned into a list item with the right category."}
-      </span>
-     </button>
-    </div>
+    <label className="kp az l bv bw ao g bm" htmlFor="km-file"
+     style={{ background: C.paper, border: `1.5px dashed ${C.line}`, cursor: "pointer", display: "flex" }}>
+     <input id="km-file" ref={fileRef} type="file" accept="image/*" onChange={handle}
+      style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }} />
+     <span className="l cf" style={{ background: C.citron }}><Camera size={20} color={C.ink} /></span>
+     <span className="kd f16 h">{mode === "receipt" ? "Add a receipt" : "Add a product photo"}</span>
+     <span className="f13 df a c ka">
+      {mode === "receipt" ? "Take a photo or choose one from your gallery. Items, prices and total land in your budget." : "Take a photo or pick one from your gallery — the label becomes a list item."}
+     </span>
+    </label>
    )}
 
    {state === "reading" && (
